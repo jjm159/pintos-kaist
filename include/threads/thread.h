@@ -91,7 +91,13 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
+
 	int64_t awake_ticks;					/* 깨어날 시간 */
+	
+	struct lock *lock_for_waiting;
+	struct list donations;
+	struct list_elem donation_elem;
+
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -146,5 +152,8 @@ void do_iret (struct intr_frame *tf);
 
 void thread_sleep(int64_t awake_ticks);
 void thread_awake(int64_t current_ticks);
+
+void thread_insert_ordered (struct list *thread_list, struct thread *thread);
+void thread_sort_by_priority(struct list *thread_list);
 
 #endif /* threads/thread.h */

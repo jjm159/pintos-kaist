@@ -66,7 +66,9 @@ static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
 static bool less_awake_time_thread(const struct list_elem *a, const struct list_elem *b, void *aux);
-static bool less_priority_thread(const struct list_elem *a, const struct list_elem *b, void *aux);
+static bool greater_priority_thread(const struct list_elem *a, const struct list_elem *b, void *aux);
+
+static int thread_get_priority_from_donation (struct thread *current);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -210,8 +212,26 @@ thread_create (const char *name, int priority,
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
 
+	// struct lock *lock = aux;
+
+	// if (is_thread(lock->holder)) {
+	// 	printf ("???\n");
+
+	// 	struct thread *holder = lock->holder;
+
+	// 	int holder_priority = holder->priority;
+
+	// 	if (holder_priority < thread_current ()->priority) {
+	// 		thread_insert_ordered (&holder->donations, thread_current ());
+	// 	}
+	// }
+
 	/* Add to run queue. */
 	thread_unblock (t);
+
+	if (thread_current ()->priority < t->priority) {
+		thread_yield ();
+	}
 
 	return tid;
 }
@@ -246,7 +266,7 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_insert_ordered (&ready_list, &t->elem, less_priority_thread, NULL);
+	thread_insert_ordered (&ready_list, t);
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -309,7 +329,7 @@ thread_yield (void) {
 
 	old_level = intr_disable ();
 	if (curr != idle_thread)
-		list_insert_ordered (&ready_list, &curr->elem, less_priority_thread, NULL);
+		thread_insert_ordered (&ready_list, curr);
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
 }
@@ -321,7 +341,16 @@ thread_set_priority (int new_priority) {
 	int old_priority = current->priority;
 
 	current->priority = new_priority;
-	list_sort (&ready_list, less_priority_thread, NULL);
+	thread_sort_by_priority (&ready_list);
+
+	if (current->lock_for_waiting != NULL) {
+		struct list *waiter_pointer = &current->lock_for_waiting->semaphore.waiters;
+		thread_sort_by_priority (waiter_pointer);
+
+		// holder가 되면, lock_for_waiting도 null 처리 해야 함
+		struct list *donations = &current->lock_for_waiting->holder->donations;
+		thread_sort_by_priority (donations);
+	}
 
 	// 우선순위가 더 낮아진 경우 스케줄링을 다시 해주어야 한다.
 	if (old_priority > new_priority) {
@@ -329,10 +358,55 @@ thread_set_priority (int new_priority) {
 	}
 }
 
+static int 
+thread_get_priority_from_donation (struct thread *current) 
+{
+	int max_priority = current->priority;
+
+	if (current->lock_for_waiting == NULL && list_empty(&current->donations)) {
+		return max_priority;
+	}
+
+	// 아래 두 상황은 동시에 일어날 수 있다.
+
+	// 1. current가 lock waiter인 경우
+	// if (current->lock_for_waiting != NULL) {
+	// 	// struct list *waiter_pointer = &current->lock_for_waiting->semaphore.waiters;
+	// 	struct thread *holder = &current->lock_for_waiting->holder;
+	// 	printf("💩 %d\n", holder->name);
+	// 	int p = thread_get_priority_from_donation (holder);
+	// 	if (p > max_priority) {
+	// 		max_priority = p;
+	// 	}
+	// }
+
+	// 2. current가 lock holder인 경우
+	struct list_elem *e;
+	for (e = list_begin (&current->donations); e != list_end (&current->donations); e = list_next (e)) {
+		struct thread *first = list_entry (list_front (&current->donations), struct thread, elem);
+		printf("💩 %d\n", first->name);
+		int p = thread_get_priority_from_donation (first);
+		if (p > max_priority) {
+			max_priority = p;
+		}
+	}
+
+	return max_priority;
+}
+
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) {
-	return thread_current ()->priority;
+	struct thread *current = thread_current ();
+	// donations에는 항상 current보다 우선순위가 높은 스레드가 존재
+
+	// enum intr_level old_level = intr_disable ();
+
+	int priority = thread_get_priority_from_donation (current);
+
+	// intr_set_level (old_level);
+
+	return priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -424,6 +498,10 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
+
+	t->awake_ticks = 0;
+	t->lock_for_waiting = NULL;
+	list_init(&t->donations);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -659,11 +737,23 @@ less_awake_time_thread(const struct list_elem *a,
 }
 
 static bool
-less_priority_thread(const struct list_elem *a,
-					 const struct list_elem *b,
-					 void *aux)
+greater_priority_thread(const struct list_elem *a,
+						const struct list_elem *b,
+						void *aux)
 {
 	struct thread *a_thread = list_entry (a, struct thread, elem);
 	struct thread *b_thread = list_entry (b, struct thread, elem);
 	return a_thread->priority > b_thread->priority;
+}
+
+void
+thread_insert_ordered (struct list *thread_list, struct thread *thread)
+{
+	list_insert_ordered (thread_list, &thread->elem, greater_priority_thread, NULL);
+}
+
+void
+thread_sort_by_priority(struct list *thread_list)
+{
+	list_sort (thread_list, greater_priority_thread, NULL);
 }
