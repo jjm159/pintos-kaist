@@ -13,6 +13,9 @@ void syscall_handler (struct intr_frame *);
 
 static bool is_valid_address(void *addr);
 
+// project_2
+static struct lock filesys_lock;
+
 /* System call.
  *
  * Previously system call services was handled by the interrupt handler
@@ -37,6 +40,9 @@ syscall_init (void) {
 	 * mode stack. Therefore, we masked the FLAG_FL. */
 	write_msr(MSR_SYSCALL_MASK,
 			FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
+
+	// project_2
+	lock_init(&filesys_lock);
 }
 
 /* The main system call interface */
