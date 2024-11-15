@@ -27,6 +27,9 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+// project_2
+static void argument_stack(char **argv, int argc, struct intr_frame *if_);
+
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -49,6 +52,10 @@ process_create_initd (const char *file_name) {
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
+
+	// project_2
+	char *ptr;
+    strtok_r(file_name, " ", &ptr);
 
 	/* Create a new thread to execute FILE_NAME. */
 	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
@@ -204,6 +211,8 @@ process_wait (tid_t child_tid UNUSED) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+
+	thread_sleep (1000);
 	return -1;
 }
 
@@ -322,6 +331,15 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
  * Returns true if successful, false otherwise. */
 static bool
 load (const char *file_name, struct intr_frame *if_) {
+
+	// project_2
+    char *ptr, *arg;
+    int argc = 0;
+    char *argv[64];
+
+    for (arg = strtok_r(file_name, " ", &ptr); arg != NULL; arg = strtok_r(NULL, " ", &ptr))
+        argv[argc++] = arg;
+
 	struct thread *t = thread_current ();
 	struct ELF ehdr;
 	struct file *file = NULL;
@@ -414,8 +432,8 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 
-	/* TODO: Your code goes here.
-	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+	// project_2
+	argument_stack (argv, argc, &if_->rsp);
 
 	success = true;
 
@@ -637,3 +655,39 @@ setup_stack (struct intr_frame *if_) {
 	return success;
 }
 #endif /* VM */
+
+
+// project_2
+static void argument_stack(char **argv, int argc, struct intr_frame *if_) 
+{
+    char *arg_addr[100];
+    int argv_len;
+
+	// argv의 인자들을 역순으로 스택에 저장 (right to left) 
+    for (int i = argc - 1; i >= 0; i--) {
+        argv_len = strlen(argv[i]) + 1;
+        if_->rsp -= argv_len;
+        memcpy(if_->rsp, argv[i], argv_len);
+        arg_addr[i] = if_->rsp;
+    }
+
+	// rsp가 8의 배수가 되도록 0으로 패딩을 추가
+    while (if_->rsp % 8)
+        *(uint8_t *)(--if_->rsp) = 0;
+
+	// argv[argc]에 NULL 포인터 설정
+    if_->rsp -= 8;
+    memset(if_->rsp, 0, sizeof(char *));
+
+	// argv 각 인자의 주소를 역순으로 저장
+    for (int i = argc - 1; i >= 0; i--) {
+        if_->rsp -= 8;
+        memcpy(if_->rsp, &arg_addr[i], sizeof(char *));
+    }
+
+	// return할 address 설정
+    if_->rsp = if_->rsp - 8;
+    memset(if_->rsp, 0, sizeof(void *));
+    if_->R.rdi = argc;
+    if_->R.rsi = if_->rsp + 8;
+}
