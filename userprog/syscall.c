@@ -11,6 +11,8 @@
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
+static bool is_valid_address(void *addr);
+
 /* System call.
  *
  * Previously system call services was handled by the interrupt handler
@@ -43,4 +45,20 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
 	printf ("system call!\n");
 	thread_exit ();
+}
+
+// project_2
+// 유저 프로그램의 주소 접근이 유효한지 확인
+// 시스템 콜 호출시 사용
+// -1 반환시 exit 호출
+static bool 
+is_valid_address(void *addr)
+{
+    if (addr == NULL)
+		return -1;
+    if (!is_user_vaddr(addr))
+		return -1;
+    if (pml4_get_page(thread_current()->pml4, addr) == NULL)
+		return -1;
+	return 0;
 }
