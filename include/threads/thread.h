@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -33,6 +34,10 @@ typedef int tid_t;
 #define NICE_DEFAULT 0
 #define RECENT_CPU_DEFAULT 0
 #define LOAD_AVG_DEFAULT 0
+
+// project_2
+#define FDT_PAGES 2
+#define FDT_COUNT_LIMIT 128
 
 /* A kernel thread or user process.
  *
@@ -112,6 +117,22 @@ struct thread {
 
 	int nice;
 	int recent_cpu;
+
+	// project_2
+	struct file **fdt; 					/* 파일 디스크립터 테이블 */
+	int next_fd; 						/* fd index mangement */
+	int exit_status;
+
+	struct intr_frame parent_if;
+	struct list child_list;
+	struct list_elem child_elem;
+
+	struct semaphore load_sema; 
+	struct semaphore exit_sema;
+	struct semaphore wait_sema;
+
+	struct file *running; // 현재 실행중인 파일
+
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
