@@ -20,6 +20,7 @@
 #include "intrinsic.h"
 #ifdef VM
 #include "vm/vm.h"
+#include "userprog/syscall.h"
 #endif
 
 static void process_cleanup (void);
@@ -29,6 +30,8 @@ static void __do_fork (void *);
 
 // project_2
 static void argument_stack(char **parse, int count, void **rsp);
+
+
 
 /* General process initializer for initd and other process. */
 static void
@@ -101,14 +104,8 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	sema_down(&child->load_sema);
 
 	// 자식이 로드되다가 오류로 exit한 경우
-	if (child->exit_status == -2)
+	if (child->exit_status == TID_ERROR)
 	{
-		// 자식이 종료되었으므로 자식 리스트에서 제거한다.
-		// 이거 넣으면 간헐적으로 실패함 (syn-read)
-		// list_remove(&child->child_elem);
-		// 자식이 완전히 종료되고 스케줄링이 이어질 수 있도록 자식에게 signal을 보낸다.
-		sema_up(&child->exit_sema);
-		// 자식 프로세스의 pid가 아닌 TID_ERROR를 반환한다.
 		return TID_ERROR;
 	}
 
@@ -214,7 +211,7 @@ __do_fork (void *aux) {
 		do_iret (&if_);
 error:
 	sema_up (&current->load_sema);
-	exit(-2);
+	exit(TID_ERROR);
 }
 
 /* Switch the current execution context to the f_name.
@@ -243,7 +240,10 @@ process_exec (void *f_name) {
 		parse[count++] = token;
 
 	/* And then load the binary */
+
+	lock_acquire (&filesys_lock);
 	success = load (file_name, &_if);
+	lock_release (&filesys_lock);
 
 	/* If load failed, quit. */
 	if (!success) {
@@ -676,11 +676,26 @@ install_page (void *upage, void *kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-static bool
+
+bool
 lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: Load the segment from the file */
-	/* TODO: This called when the first page fault occurs on address VA. */
-	/* TODO: VA is available when calling this function. */
+	
+	struct lazy_load_arg *lazy_load_arg = (struct lazy_load_arg *)aux;
+
+	// file을 ofs부터 읽기 시작
+	file_seek(lazy_load_arg->file, lazy_load_arg->ofs);
+
+	// ofs 위치부터, read_bytes 만큼 읽어서 물리 프레임에 할당
+	if (file_read(lazy_load_arg->file, page->frame->kva, lazy_load_arg->read_bytes) != (int) (lazy_load_arg->read_bytes))
+	{
+		palloc_free_page(page->frame->kva);
+		return false;
+	}
+
+	// 이후 바이트는 0으로 초기화
+	memset(page->frame->kva + lazy_load_arg->read_bytes, 0, lazy_load_arg->zero_bytes);
+
+	return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -708,19 +723,24 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		/* Do calculate how to fill this page.
 		 * We will read PAGE_READ_BYTES bytes from FILE
 		 * and zero the final PAGE_ZERO_BYTES bytes. */
+
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: Set up aux to pass information to the lazy_load_segment. */
-		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
+		// disc의 주소를 저장
+		struct lazy_load_arg *lazy_load_arg = (struct lazy_load_arg *) malloc (sizeof (struct lazy_load_arg));
+		lazy_load_arg->file = file;
+		lazy_load_arg->ofs = ofs;
+		lazy_load_arg->read_bytes = page_read_bytes;
+		lazy_load_arg->zero_bytes = page_zero_bytes;
+
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, lazy_load_arg))
 			return false;
 
-		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
+		ofs += page_read_bytes;
 	}
 	return true;
 }
@@ -729,12 +749,18 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (struct intr_frame *if_) {
 	bool success = false;
+
+	// 스택의 쌓이는 방향은 반대
+	// 낮은 주소로 먼저 bottom을 옮겨서, bottom에 page를 할당
+	// 할당하고 옮기는게 아니라 먼저 옮기고 할당해야 함!!!
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
 
-	/* TODO: Map the stack on stack_bottom and claim the page immediately.
-	 * TODO: If success, set the rsp accordingly.
-	 * TODO: You should mark the page is stack. */
-	/* TODO: Your code goes here */
+	if (vm_alloc_page (VM_ANON | VM_MARKER_0, stack_bottom, 1))
+	{
+		success = vm_claim_page(stack_bottom);
+		if (success)
+			if_->rsp = USER_STACK;
+	}
 
 	return success;
 }

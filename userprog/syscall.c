@@ -14,6 +14,7 @@
 #include "devices/input.h"
 #include "lib/kernel/stdio.h"
 #include "threads/palloc.h"
+#include "vm/vm.h"
 
 
 void syscall_entry (void);
@@ -36,6 +37,9 @@ tid_t fork(const char *thread_name, struct intr_frame *f);
 int exec(const char *cmd_line);
 int wait(int pid);
 
+// project_3
+void *mmap(void *addr, size_t length, int writable, int fd, off_t offset);
+void munmap(void *addr);
 
 /* System call.
  *
@@ -70,6 +74,13 @@ syscall_init (void) {
 void syscall_handler(struct intr_frame *f UNUSED)
 {
 	int syscall_n = f->R.rax; /* 시스템 콜 넘버 */
+
+// project_3
+// 
+#ifdef VM
+	thread_current() -> rsp =  f -> rsp; 
+#endif
+
 	switch (syscall_n)
 	{
 	case SYS_HALT:
@@ -113,6 +124,13 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		break;
 	case SYS_CLOSE:
 		close(f->R.rdi);
+		break;
+	case SYS_MMAP:
+		f->R.rax = mmap(f->R.rdi, f->R.rsi, f->R.rdx, f->R.r10, f->R.r8);
+		break;
+	case SYS_MUNMAP:
+		munmap(f->R.rdi);
+		break;
 	}
 }
 
@@ -122,8 +140,15 @@ void check_address(void *addr)
 		exit(-1);
 	if (!is_user_vaddr(addr))
 		exit(-1);
+#ifdef USERPROG
 	if (pml4_get_page(thread_current()->pml4, addr) == NULL)
 		exit(-1);
+#endif
+
+#ifdef VM
+	if (spt_find_page (&thread_current () -> spt, addr) == NULL)
+		exit(-1);
+#endif 
 }
 
 void halt(void)
@@ -141,8 +166,11 @@ void exit(int status)
 
 bool create(const char *file, unsigned initial_size)
 {
+	lock_acquire (&filesys_lock);
 	check_address(file);
-	return filesys_create(file, initial_size);
+	bool success = filesys_create (file, initial_size);
+	lock_release (&filesys_lock);
+	return success;
 }
 
 bool remove(const char *file)
@@ -154,12 +182,16 @@ bool remove(const char *file)
 int open(const char *file_name)
 {
 	check_address(file_name);
+	lock_acquire (&filesys_lock);
 	struct file *file = filesys_open(file_name);
-	if (file == NULL)
+	if (file == NULL) {
+		lock_release (&filesys_lock);
 		return -1;
+	}
 	int fd = process_add_file(file);
 	if (fd == -1)
 		file_close(file);
+	lock_release (&filesys_lock);
 	return fd;
 }
 
@@ -195,6 +227,7 @@ void close(int fd)
 	file_close(file);
 	process_close_file(fd);
 }
+
 int read(int fd, void *buffer, unsigned size)
 {
 	check_address(buffer);
@@ -223,10 +256,18 @@ int read(int fd, void *buffer, unsigned size)
 		struct file *file = process_get_file(fd);
 		if (file == NULL)
 		{
-
 			lock_release(&filesys_lock);
 			return -1;
 		}
+
+		// project_3
+		// page 검증
+		struct page *page = spt_find_page (&thread_current () -> spt, buffer);
+		if (page && !page->writable) {
+			lock_release (&filesys_lock);
+			exit(-1);
+		}
+
 		bytes_read = file_read(file, buffer, size);
 		lock_release(&filesys_lock);
 	}
@@ -280,4 +321,34 @@ int exec(const char *cmd_line)
 int wait(int pid)
 {
 	return process_wait(pid);
+}
+
+void *mmap(void *addr, size_t length, int writable, int fd, off_t offset)
+{
+	if (!addr)
+		return NULL;
+	if (addr != pg_round_down(addr))
+		return NULL;
+	if (offset != pg_round_down(offset))
+		return NULL;
+	if (!is_user_vaddr(addr))
+		return NULL;
+	if (!is_user_vaddr(addr + length))
+		return NULL;
+	if (spt_find_page(&thread_current()->spt, addr))
+		return NULL;
+	
+	struct file *f = process_get_file(fd);
+	if (f == NULL)
+		return NULL;
+
+	if (file_length(f) == 0 || (int) length <= 0)
+		return NULL;
+
+	return do_mmap(addr, length, writable, f, offset); // 파일이 매핑된 가상 주소 반환
+}
+
+void munmap(void *addr)
+{
+	do_munmap(addr);
 }
