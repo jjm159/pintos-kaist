@@ -122,8 +122,8 @@ void check_address(void *addr)
 		exit(-1);
 	if (!is_user_vaddr(addr))
 		exit(-1);
-	if (pml4_get_page(thread_current()->pml4, addr) == NULL)
-		exit(-1);
+	// if (pml4_get_page(thread_current()->pml4, addr) == NULL)
+	// 	exit(-1);
 }
 
 void halt(void)
@@ -195,6 +195,7 @@ void close(int fd)
 	file_close(file);
 	process_close_file(fd);
 }
+
 int read(int fd, void *buffer, unsigned size)
 {
 	check_address(buffer);
