@@ -81,7 +81,8 @@ err:
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 
-	struct page *page = malloc (sizeof (struct page));
+	struct page *page = NULL;	
+	page = malloc (sizeof (struct page));
     struct hash_elem *e;
 
     // va에 해당하는 hash_elem 찾기
@@ -152,6 +153,9 @@ vm_get_frame (void) {
 /* Growing the stack. */
 static void
 vm_stack_growth (void *addr UNUSED) {
+	// anonymous page를 1개만 할당
+	// addr을 내림 처리 -> 스택이 거꾸로 자라기 때문
+	vm_alloc_page (VM_ANON | VM_MARKER_0, pg_round_down(addr), 1);
 }
 
 /* Handle the fault on write_protected page */
@@ -173,9 +177,22 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
     if (is_kernel_vaddr(addr))
         return false;
 
+	// a bogus fault
 	// 물리 페이지(프레임)가 매핑되지 않은 상황
 	if (not_present) 
-	{
+	{		
+		// stack growth로 해결 가능한 상황
+		void *rsp = f -> rsp;
+
+		if (!user) {
+			rsp = thread_current ()	-> rsp;
+		}
+
+		if (USER_STACK - (1 << 20) <= rsp - 8 && rsp - 8 == addr && addr <= USER_STACK)
+			vm_stack_growth(addr);
+		else if (USER_STACK - (1 << 20) <= rsp && rsp <= addr && addr <= USER_STACK)
+			vm_stack_growth(addr);
+
 		page = spt_find_page(spt, addr);
 		if (page == NULL)
 			return false;
