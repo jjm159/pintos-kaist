@@ -14,13 +14,14 @@
 #include "devices/input.h"
 #include "lib/kernel/stdio.h"
 #include "threads/palloc.h"
+#include "vm/vm.h"
+
 
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
 // project_2
-void check_address(void *addr);
 void halt(void);
 void exit(int status);
 bool create(const char *file, unsigned initial_size);
@@ -70,6 +71,9 @@ syscall_init (void) {
 void syscall_handler(struct intr_frame *f UNUSED)
 {
 	int syscall_n = f->R.rax; /* 시스템 콜 넘버 */
+	#ifdef VM
+		thread_current()->rsp = f->rsp;
+	#endif
 	switch (syscall_n)
 	{
 	case SYS_HALT:
@@ -116,15 +120,42 @@ void syscall_handler(struct intr_frame *f UNUSED)
 	}
 }
 
+
+#ifndef VM
+/** #Project 2: System Call */
 void check_address(void *addr)
 {
-	if (addr == NULL)
+	struct thread *curr = thread_current();
+
+	if (is_kernel_vaddr(addr) || addr == NULL || pml4_get_page(curr->pml4, addr) == NULL)
 		exit(-1);
-	if (!is_user_vaddr(addr))
-		exit(-1);
-	// if (pml4_get_page(thread_current()->pml4, addr) == NULL)
-	// 	exit(-1);
 }
+#else
+// Project 3: Memory Mapped Files
+struct page *check_address(void *addr)
+{
+	struct thread *curr = thread_current();
+
+	if (is_kernel_vaddr(addr) || addr == NULL)
+		exit(-1);
+
+	spt_find_page(&curr->spt, addr);
+}
+ 
+// Project 3: Memory Mapped Files
+// 버퍼 유효성 검사
+void check_valid_buffer(void *buffer, size_t size, bool writable)
+{
+	for (size_t i = 0; i < size; i++)
+	{
+		/* buffer가 spt에 존재하는지 검사 */
+		struct page *page = check_address(buffer + i);
+
+		if (!page || (writable && !(page->writable)))
+			exit(-1);
+	}
+}
+#endif
 
 void halt(void)
 {
@@ -198,6 +229,10 @@ void close(int fd)
 
 int read(int fd, void *buffer, unsigned size)
 {
+	#ifdef VM
+    check_valid_buffer(buffer, size, true);
+	#endif
+
 	check_address(buffer);
 
 	char *ptr = (char *)buffer;
@@ -236,6 +271,10 @@ int read(int fd, void *buffer, unsigned size)
 
 int write(int fd, const void *buffer, unsigned size)
 {
+	#ifdef VM
+    check_valid_buffer(buffer, size, true);
+	#endif
+
 	check_address(buffer);
 	int bytes_write = 0;
 	if (fd == STDOUT_FILENO)
