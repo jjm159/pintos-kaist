@@ -1,5 +1,6 @@
 #ifndef VM_VM_H
 #define VM_VM_H
+#include "include/lib/kernel/hash.h"
 #include <stdbool.h>
 #include "threads/palloc.h"
 
@@ -45,7 +46,11 @@ struct page {
 	void *va;              /* Address in terms of user space */
 	struct frame *frame;   /* Back reference for frame */
 
-	/* Your implementation */
+	/* project 3 */
+	struct hash_elem hash_elem; // 보조 테이블
+	bool writable;
+
+	int mapped_page_count; // 매핑에 사용된 페이지 개수
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -85,6 +90,8 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
+	// project 3
+	struct hash spt_hash; // supplementary page table
 };
 
 #include "threads/thread.h"
@@ -108,5 +115,6 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
 enum vm_type page_get_type (struct page *page);
+void hash_page_destroy(struct hash_elem *e, void *aux);
 
 #endif  /* VM_VM_H */

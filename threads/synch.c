@@ -32,6 +32,8 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+#include "userprog/syscall.h"
+
 static bool greater_priority_sema(const struct list_elem *a, const struct list_elem *b, void *aux);
 static void donate (void);
 
@@ -68,6 +70,8 @@ sema_down (struct semaphore *sema) {
 	ASSERT (!intr_context ());
 
 	old_level = intr_disable ();
+	struct thread* current = thread_current();
+	unsigned a = sema->value;
 	while (sema->value == 0) {
 		list_insert_ordered (&sema->waiters, &thread_current ()->elem, greater_priority_thread, NULL);
 		thread_block ();
@@ -189,18 +193,16 @@ lock_init (struct lock *lock) {
    we need to sleep. */
 void
 lock_acquire (struct lock *lock) {
+	ASSERT (lock != NULL);
+	ASSERT (!intr_context ());
+	ASSERT (!lock_held_by_current_thread (lock));
+
 	if (thread_mlfqs) 
 	{
 		sema_down (&lock->semaphore);
 		lock->holder = thread_current ();
 		return;
 	}
-
-	ASSERT (lock != NULL);
-	ASSERT (!intr_context ());
-	ASSERT (!lock_held_by_current_thread (lock));
-
-	struct thread *current = thread_current ();
 
 	if (lock->holder) {
 		current->lock_for_waiting = lock;
